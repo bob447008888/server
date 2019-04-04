@@ -40,7 +40,7 @@ Created 9/20/1997 Heikki Tuuri
 extern bool	recv_writer_thread_active;
 
 /** @return whether recovery is currently running. */
-#define recv_recovery_is_on() recv_recovery_on
+#define recv_recovery_is_on() UNIV_UNLIKELY(recv_recovery_on)
 
 /** Find the latest checkpoint in the log header.
 @param[out]	max_field	LOG_CHECKPOINT_1 or LOG_CHECKPOINT_2
