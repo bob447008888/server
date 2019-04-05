@@ -2339,12 +2339,6 @@ ignore:
 				goto ignore;
 			}
 
-			fil_space_t* space = fil_space_acquire(
-				recv_addr->space);
-			if (!space) {
-				goto ignore;
-			}
-
 			const page_id_t page_id(recv_addr->space,
 						recv_addr->page_no);
 
@@ -2371,9 +2365,21 @@ apply:
 
 				if (UT_LIST_GET_LAST(recv_addr->rec_list)
 				    ->end_lsn < op.lsn) {
-					fil_space_release(space);
+skip:
 					op.load = true;
 					goto ignore;
+				}
+
+				if (op.load) {
+do_read:
+					recv_addr->state = RECV_NOT_PROCESSED;
+					goto apply;
+				}
+
+				fil_space_t* space = fil_space_acquire(
+					recv_addr->space);
+				if (!space) {
+					goto skip;
 				}
 
 				/* Determine if a tablespace could be
@@ -2391,10 +2397,11 @@ apply:
 				The check is too broad, causing all
 				tables whose names start with FTS_ to
 				skip the optimization. */
-				if (op.load || strstr(space->name, "/FTS_")) {
+
+				if (strstr(space->name, "/FTS_")) {
+					fil_space_release(space);
 					op.load = true;
-					recv_addr->state = RECV_NOT_PROCESSED;
-					goto apply;
+					goto do_read;
 				}
 
 				mtr.start();
@@ -2420,9 +2427,9 @@ apply:
 							  recv_addr, op.lsn);
 					ut_ad(mtr.has_committed());
 				}
-			}
 
-			fil_space_release(space);
+				fil_space_release(space);
+			}
 		}
 	}
 
