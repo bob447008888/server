@@ -272,11 +272,6 @@ btr_root_get(
 	And block the segment list access by others.*/
 	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH,
 					       mtr);
-
-	if (root && root->page.encrypted == true) {
-		root = NULL;
-	}
-
 	return(root ? buf_block_get_frame(root) : NULL);
 }
 

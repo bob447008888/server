@@ -1554,16 +1554,12 @@ fil_names_write_if_was_clean(
 	return(was_clean);
 }
 
-extern volatile bool	recv_recovery_on;
-
 /** During crash recovery, open a tablespace if it had not been opened
 yet, to get valid size and flags.
 @param[in,out]	space	tablespace */
-inline
-void
-fil_space_open_if_needed(
-	fil_space_t*	space)
+inline void fil_space_open_if_needed(fil_space_t* space)
 {
+	ut_d(extern volatile bool recv_recovery_on);
 	ut_ad(recv_recovery_on);
 
 	if (space->size == 0) {
@@ -1571,10 +1567,7 @@ fil_space_open_if_needed(
 		until the files are opened for the first time.
 		fil_space_get_size() will open the file
 		and adjust the size and flags. */
-#ifdef UNIV_DEBUG
-		ulint		size	=
-#endif /* UNIV_DEBUG */
-			fil_space_get_size(space->id);
+		ut_d(ulint size	=) fil_space_get_size(space->id);
 		ut_ad(size == space->size);
 	}
 }

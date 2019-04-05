@@ -1169,9 +1169,7 @@ fil_space_free(
 			rw_lock_x_unlock(&space->latch);
 		}
 
-		bool	need_mutex = !recv_recovery_on;
-
-		if (need_mutex) {
+		if (!recv_recovery_is_on()) {
 			log_mutex_enter();
 		}
 
@@ -1182,7 +1180,7 @@ fil_space_free(
 			UT_LIST_REMOVE(fil_system.named_spaces, space);
 		}
 
-		if (need_mutex) {
+		if (!recv_recovery_is_on()) {
 			log_mutex_exit();
 		}
 
@@ -1241,7 +1239,7 @@ fil_space_create(
 	UT_LIST_INIT(space->chain, &fil_node_t::chain);
 
 	if ((purpose == FIL_TYPE_TABLESPACE || purpose == FIL_TYPE_IMPORT)
-	    && !recv_recovery_on
+	    && !recv_recovery_is_on()
 	    && id > fil_system.max_assigned_id) {
 
 		if (!fil_system.space_id_reuse_warned) {
@@ -2847,7 +2845,7 @@ fil_rename_tablespace(
 	ut_ad(strchr(old_file_name, OS_PATH_SEPARATOR) != NULL);
 	ut_ad(strchr(new_file_name, OS_PATH_SEPARATOR) != NULL);
 
-	if (!recv_recovery_on) {
+	if (!recv_recovery_is_on()) {
 		fil_name_write_rename(id, old_file_name, new_file_name);
 		log_mutex_enter();
 	}
@@ -2869,7 +2867,7 @@ fil_rename_tablespace(
 		node->name = new_file_name;
 	}
 
-	if (!recv_recovery_on) {
+	if (!recv_recovery_is_on()) {
 		log_mutex_exit();
 	}
 
