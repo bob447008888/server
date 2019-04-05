@@ -1008,25 +1008,51 @@ c	LENGTH(c)
 ------
 
 CALL p1('FFFFFFFFFFFFFFFFFF');
+ERROR 22007: Truncated incorrect INTEGER value: '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF'
+CALL p1('FFFFFFFFFFFFFFFFFFFF');
+ERROR 22007: Truncated incorrect INTEGER value: '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF'
+CALL p1('313131313131313131');
 Field	Type	Null	Key	Default	Extra
-c	bigint(20) unsigned	NO		NULL	
+c	int(9) unsigned	NO		NULL	
 c	LENGTH(c)
-18446744073709551615	20
+111111111	9
 Field	Type	Null	Key	Default	Extra
-c	bigint(20)	NO		NULL	
+c	int(9)	NO		NULL	
 c	LENGTH(c)
--1	2
+111111111	9
 ------
 
-CALL p1('FFFFFFFFFFFFFFFFFFFF');
+CALL p1('31313131313131313131');
 Field	Type	Null	Key	Default	Extra
-c	bigint(20) unsigned	NO		NULL	
+c	int(10) unsigned	NO		NULL	
 c	LENGTH(c)
-18446744073709551615	20
+1111111111	10
 Field	Type	Null	Key	Default	Extra
-c	bigint(20)	NO		NULL	
+c	bigint(10)	NO		NULL	
 c	LENGTH(c)
--1	2
+1111111111	10
+------
+
+CALL p1('3131313131313131313131');
+Field	Type	Null	Key	Default	Extra
+c	bigint(11) unsigned	NO		NULL	
+c	LENGTH(c)
+11111111111	11
+Field	Type	Null	Key	Default	Extra
+c	bigint(11)	NO		NULL	
+c	LENGTH(c)
+11111111111	11
+------
+
+CALL p1('313131313131313131313131');
+Field	Type	Null	Key	Default	Extra
+c	bigint(12) unsigned	NO		NULL	
+c	LENGTH(c)
+111111111111	12
+Field	Type	Null	Key	Default	Extra
+c	bigint(12)	NO		NULL	
+c	LENGTH(c)
+111111111111	12
 ------
 
 CALL p1('8000000000000000');

@@ -3988,6 +3988,8 @@ public:
 
   Item *create_and_link_Item_trigger_field(THD *thd, const LEX_CSTRING *name,
                                            bool new_row);
+  // SELECT 0x112233
+  Item_literal *make_item_literal_hex_hybrid(THD *thd, const LEX_CSTRING &str) const;
   // For syntax with colon, e.g. :NEW.a  or :OLD.a
   Item *make_item_colon_ident_ident(THD *thd,
                                     const Lex_ident_cli_st *a,

@@ -15225,8 +15225,7 @@ literal:
           }
         | HEX_NUM
           {
-            $$= new (thd->mem_root) Item_hex_hybrid(thd, $1.str, $1.length);
-            if (unlikely($$ == NULL))
+            if (unlikely(($$= Lex->make_item_literal_hex_hybrid(thd, $1)) == NULL))
               MYSQL_YYABORT;
           }
         | HEX_STRING

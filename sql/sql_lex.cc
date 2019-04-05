@@ -10391,3 +10391,13 @@ bool LEX::stmt_create_stored_function_start(const DDL_options_st &options,
     return true;
   return false;
 }
+
+
+Item_literal *
+LEX::make_item_literal_hex_hybrid(THD *thd, const LEX_CSTRING &str) const
+{
+  if (str.length > 16) // 16 digits == 8 bytes
+    return new (thd->mem_root) Item_hex_string(thd, str.str, str.length);
+  else
+    return new (thd->mem_root) Item_hex_hybrid(thd, str.str, str.length);
+}
