@@ -273,11 +273,6 @@ btr_root_get(
 	And block the segment list access by others.*/
 	buf_block_t* root = btr_root_block_get(index, RW_SX_LATCH,
 					       mtr);
-
-	if (root && root->page.encrypted == true) {
-		root = NULL;
-	}
-
 	return(root ? buf_block_get_frame(root) : NULL);
 }
 
@@ -5423,8 +5418,8 @@ btr_validate_index(
 
 	page_t*	root = btr_root_get(index, &mtr);
 
-	if (root == NULL && !index->is_readable()) {
-		err = DB_DECRYPTION_FAILED;
+	if (!root) {
+		err = DB_CORRUPTION;
 		mtr_commit(&mtr);
 		return err;
 	}

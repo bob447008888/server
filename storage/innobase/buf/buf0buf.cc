@@ -4263,7 +4263,8 @@ buf_page_get_gen(
 		Skip the assertion on space_page_size. */
 		break;
 	case BUF_PEEK_IF_IN_POOL:
-		/* In this mode, the caller may pass a dummy page size,
+	case BUF_GET_IF_IN_POOL:
+		/* The caller may pass a dummy page size,
 		because it does not really matter. */
 		break;
 	default:
@@ -4272,7 +4273,6 @@ buf_page_get_gen(
 		ut_ad(rw_latch == RW_NO_LATCH);
 		/* fall through */
 	case BUF_GET:
-	case BUF_GET_IF_IN_POOL:
 	case BUF_GET_IF_IN_POOL_OR_WATCH:
 	case BUF_GET_POSSIBLY_FREED:
 		bool			found;
@@ -5612,7 +5612,15 @@ buf_page_create(
 
 		buf_block_free(free_block);
 
-		return(buf_page_get_with_no_latch(page_id, page_size, mtr));
+		if (!recv_recovery_is_on()) {
+			return buf_page_get_with_no_latch(page_id, page_size,
+							  mtr);
+		}
+
+		mutex_exit(&recv_sys->mutex);
+		block = buf_page_get_with_no_latch(page_id, page_size, mtr);
+		mutex_enter(&recv_sys->mutex);
+		return block;
 	}
 
 	/* If we get here, the page was not in buf_pool: init it there */
@@ -5678,7 +5686,9 @@ buf_page_create(
 
 	/* Delete possible entries for the page from the insert buffer:
 	such can exist if the page belonged to an index which was dropped */
-	ibuf_merge_or_delete_for_page(NULL, page_id, &page_size, TRUE);
+	if (!recv_recovery_is_on()) {
+		ibuf_merge_or_delete_for_page(NULL, page_id, &page_size, TRUE);
+	}
 
 	frame = block->frame;
 
@@ -5693,6 +5703,7 @@ buf_page_create(
 	(3) key_version on encrypted pages (not page 0:0) */
 
 	memset(frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 0, 8);
+	memset(frame + FIL_PAGE_LSN, 0, 8);
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
 	ut_a(++buf_dbg_counter % 5771 || buf_validate());
@@ -6101,9 +6112,7 @@ database_corrupted:
 				page_not_corrupt: bpage = bpage; );
 
 		if (recv_recovery_is_on()) {
-			/* Pages must be uncompressed for crash recovery. */
-			ut_a(uncompressed);
-			recv_recover_page(TRUE, (buf_block_t*) bpage);
+			recv_recover_page(bpage);
 		}
 
 		/* If space is being truncated then avoid ibuf operation.
@@ -6123,7 +6132,7 @@ database_corrupted:
 					<< " encrypted. However key "
 					"management plugin or used "
 					<< "key_version " << key_version
-					<< "is not found or"
+					<< " is not found or"
 					" used encryption algorithm or method does not match."
 					" Can't continue opening the table.";
 			} else {
