@@ -2309,12 +2309,9 @@ ignore:
 
 			const page_id_t		page_id(recv_addr->space,
 							recv_addr->page_no);
-			bool			found;
-			const page_size_t&	page_size
-				= fil_space_get_page_size(recv_addr->space,
-							  &found);
-
-			ut_ad(found);
+			fil_space_t* space = fil_space_acquire(
+				recv_addr->space);
+			const page_size_t page_size(space->flags);
 
 			if (recv_addr->state == RECV_NOT_PROCESSED) {
 apply:
@@ -2340,10 +2337,26 @@ apply:
 
 				if (UT_LIST_GET_LAST(recv_addr->rec_list)
 				    ->end_lsn < op.lsn) {
+					fil_space_release(space);
 					goto ignore;
 				}
 
-				if (op.load) {
+				/* Determine if a tablespace could be
+				for an internal table for FULLTEXT
+				INDEX.  For those tables, no
+				MLOG_INDEX_LOAD record used to be
+				written when redo logging was
+				disabled. Hence, we cannot optimize
+				away page reads, because all the redo
+				log records for initializing and
+				modifying the page in the past could
+				be older than the page in the data
+				file.
+
+				The check is a too broad, causing all
+				tables whose names start with FTS_ to
+				skip the optimization. */
+				if (op.load || strstr(space->name, "/FTS_")) {
 					recv_addr->state = RECV_NOT_PROCESSED;
 					goto apply;
 				}
@@ -2372,6 +2385,8 @@ apply:
 
 				buf_block_unfix(block);
 			}
+
+			fil_space_release(space);
 		}
 	}
 
