@@ -2651,24 +2651,21 @@ recv_report_corrupt_log(
 /** Mark the MLOG_INDEX_LOAD record for the page id.
 @param[in]	space		tablespace id
 @param[in]	page_no		page number
-@param[in]	start_lsn	start lsn of the redo log
-@param[in]	store		To indicate whether hash table
-				ran out of memory. */
-static void recv_mark_log_index_load(
-	ulint	space,
-	ulint	page_no,
-	lsn_t	start_lsn,
-	store_t	store)
+@param[in]	lsn		log sequence number */
+ATTRIBUTE_COLD static void
+recv_mlog_index_load(ulint space, ulint page_no, lsn_t lsn)
 {
-	if (store != STORE_YES) {
-		mlog_reset.add(space, page_no, start_lsn, true);
-	}
+	mlog_reset.add(space, page_no, lsn, true);
 
 	if (recv_addr_t* recv_addr = recv_get_fil_addr_struct(
 		    space, page_no)) {
 		ut_ad(recv_addr->state == RECV_NOT_PROCESSED
 		      || recv_addr->state == RECV_WILL_NOT_READ);
 		recv_addr->state = RECV_NOT_PROCESSED;
+	}
+
+	if (log_optimized_ddl_op) {
+		log_optimized_ddl_op(space);
 	}
 }
 
@@ -2830,11 +2827,7 @@ loop:
 			/* fall through */
 		case MLOG_INDEX_LOAD:
 			if (type == MLOG_INDEX_LOAD) {
-				recv_mark_log_index_load(
-					space, page_no, old_lsn, store);
-				if (log_optimized_ddl_op) {
-					log_optimized_ddl_op(space);
-				}
+				recv_mlog_index_load(space, page_no, old_lsn);
 			}
 			/* fall through */
 		case MLOG_FILE_NAME:
@@ -2988,11 +2981,7 @@ corrupted_log:
 				break;
 #endif /* UNIV_LOG_LSN_DEBUG */
 			case MLOG_INDEX_LOAD:
-				recv_mark_log_index_load(
-					space, page_no, old_lsn, store);
-				if (log_optimized_ddl_op) {
-					log_optimized_ddl_op(space);
-				}
+				recv_mlog_index_load(space, page_no, old_lsn);
 				break;
 			case MLOG_FILE_NAME:
 			case MLOG_FILE_DELETE:
