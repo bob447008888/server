@@ -279,10 +279,49 @@ public:
 	@param[in,out]	init	initialize log or load log
 	@return the latest special operation for the page;
 	not valid after releasing recv_sys->mutex. */
-	const op& last(page_id_t page_id) const
+	op& last(page_id_t page_id)
 	{
 		ut_ad(mutex_own(&recv_sys->mutex));
 		return ids.find(page_id)->second;
+	}
+
+	/** On the last recovery batch, merge buffered changes to those
+	pages that were initialized by buf_page_create() and still reside
+	in the buffer pool. Stale pages are not allowed in the buffer pool.
+
+	Note: When MDEV-14481 implements redo log apply in the
+	background, we will have to ensure that buf_page_get_gen()
+	will not deliver stale pages to users (pages on which the
+	change buffer was not merged yet).  Normally, the change
+	buffer merge is performed on I/O completion. Maybe, add a
+	flag to buf_page_t and perform the change buffer merge on
+	the first actual access?
+	@param[in,out]	mtr	dummy mini-transaction */
+	void ibuf_merge(mtr_t& mtr)
+	{
+		ut_ad(mutex_own(&recv_sys->mutex));
+		ut_ad(!recv_no_ibuf_operations);
+		mtr.start();
+
+		for (map::const_iterator i= ids.begin(); i != ids.end(); i++) {
+			if (i->second.load) {
+				continue;
+			}
+			if (buf_block_t* block = buf_page_get_gen(
+				    i->first, univ_page_size, RW_X_LATCH, NULL,
+				    BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
+				    &mtr, NULL)) {
+				mutex_exit(&recv_sys->mutex);
+				ibuf_merge_or_delete_for_page(
+					block, i->first,
+					&block->page.size, true);
+				mtr.commit();
+				mtr.start();
+				mutex_enter(&recv_sys->mutex);
+			}
+		}
+
+		mtr.commit();
 	}
 
 	/** Clear the data structure */
@@ -2308,16 +2347,15 @@ ignore:
 
 			const page_id_t page_id(recv_addr->space,
 						recv_addr->page_no);
-			const page_size_t page_size(space->flags);
 
 			if (recv_addr->state == RECV_NOT_PROCESSED) {
 apply:
 				mtr.start();
 				mtr.set_log_mode(MTR_LOG_NONE);
 				buf_block_t* block = buf_page_get_gen(
-					page_id, page_size, RW_X_LATCH, NULL,
-					BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
-					&mtr, NULL);
+					page_id, univ_page_size, RW_X_LATCH,
+					NULL, BUF_GET_IF_IN_POOL,
+					__FILE__, __LINE__, &mtr, NULL);
 				if (block) {
 					buf_block_dbg_add_level(
 						block, SYNC_NO_ORDER_CHECK);
@@ -2329,12 +2367,12 @@ apply:
 					recv_read_in_area(page_id);
 				}
 			} else {
-				const mlog_reset_t::op& op
-					= mlog_reset.last(page_id);
+				mlog_reset_t::op& op= mlog_reset.last(page_id);
 
 				if (UT_LIST_GET_LAST(recv_addr->rec_list)
 				    ->end_lsn < op.lsn) {
 					fil_space_release(space);
+					op.load = true;
 					goto ignore;
 				}
 
@@ -2354,6 +2392,7 @@ apply:
 				tables whose names start with FTS_ to
 				skip the optimization. */
 				if (op.load || strstr(space->name, "/FTS_")) {
+					op.load = true;
 					recv_addr->state = RECV_NOT_PROCESSED;
 					goto apply;
 				}
@@ -2361,7 +2400,8 @@ apply:
 				mtr.start();
 				mtr.set_log_mode(MTR_LOG_NONE);
 				buf_block_t* block = buf_page_create(
-					page_id, page_size, &mtr);
+					page_id, page_size_t(space->flags),
+					&mtr);
 				if (recv_addr->state == RECV_PROCESSED) {
 					/* The page happened to exist
 					in the buffer pool, or it was
@@ -2369,30 +2409,16 @@ apply:
 					buf_page_get_with_no_latch()
 					returned, all changes must have
 					been applied to the page already. */
+					op.load = true;
 					mtr.commit();
 				} else {
 					buf_block_dbg_add_level(
 						block,
 						SYNC_NO_ORDER_CHECK);
-					buf_block_fix(block);
 					mtr.x_latch_at_savepoint(0, block);
 					recv_recover_page(block, mtr,
 							  recv_addr, op.lsn);
 					ut_ad(mtr.has_committed());
-
-					if (!recv_no_ibuf_operations) {
-						/* We skipped this in
-						buf_page_create(). */
-						mutex_exit(&recv_sys->mutex);
-						rw_lock_x_lock(&block->lock);
-						ibuf_merge_or_delete_for_page(
-							block, page_id,
-							&page_size, true);
-						rw_lock_x_unlock(&block->lock);
-						mutex_enter(&recv_sys->mutex);
-					}
-
-					buf_block_unfix(block);
 				}
 			}
 
@@ -2448,6 +2474,9 @@ apply:
 
 		log_mutex_enter();
 		mutex_enter(&(recv_sys->mutex));
+	} else if (!recv_no_ibuf_operations) {
+		/* We skipped this in buf_page_create(). */
+		mlog_reset.ibuf_merge(mtr);
 	}
 
 	recv_sys->apply_log_recs = FALSE;
