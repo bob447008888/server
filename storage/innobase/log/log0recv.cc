@@ -2978,10 +2978,11 @@ corrupted_log:
 				break;
 #endif /* UNIV_LOG_LSN_DEBUG */
 			case MLOG_INDEX_LOAD:
-				/* Mariabackup FIXME: Report an error
-				when encountering MLOG_INDEX_LOAD on
-				--prepare or already on --backup. */
-				ut_a(srv_operation == SRV_OPERATION_NORMAL);
+				recv_mark_log_index_load(
+					space, page_no, old_lsn, store);
+				if (log_optimized_ddl_op) {
+					log_optimized_ddl_op(space);
+				}
 				break;
 			case MLOG_FILE_NAME:
 			case MLOG_FILE_DELETE:

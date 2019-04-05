@@ -1807,5 +1807,10 @@ exit:
 		ib::info() << "InnoDB_FTS: inserted " << count << " records";
 	}
 
+	if (FlushObserver* flush_observer = psort_info[0].psort_common->trx
+	    ->get_flush_observer()) {
+		row_merge_write_redo(aux_index);
+	}
+
 	return(error);
 }
