@@ -1915,12 +1915,16 @@ recv_add_to_hash_table(
 		recv_sys->n_addrs++;
 	}
 
-	if (type == MLOG_INIT_FILE_PAGE2 || type == MLOG_ZIP_PAGE_COMPRESS) {
+	switch (type) {
+	case MLOG_INIT_FILE_PAGE2:
+	case MLOG_ZIP_PAGE_COMPRESS:
 		/* Ignore any earlier redo log records for this page. */
 		ut_ad(recv_addr->state == RECV_NOT_PROCESSED
 		      || recv_addr->state == RECV_WILL_NOT_READ);
 		recv_addr->state = RECV_WILL_NOT_READ;
 		mlog_reset.add(space, page_no, start_lsn, false);
+	default:
+		break;
 	}
 
 	UT_LIST_ADD_LAST(recv_addr->rec_list, recv);
@@ -1998,8 +2002,6 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 {
 	page_t*		page;
 	page_zip_des_t*	page_zip;
-	recv_t*		recv;
-	byte*		buf;
 
 	ut_ad(mutex_own(&recv_sys->mutex));
 	ut_ad(recv_sys->apply_log_recs);
@@ -2012,9 +2014,7 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 			recv_addr->space, recv_addr->page_no);
 	}
 
-	DBUG_PRINT("ib_log",
-		   ("Applying log to page %u:%u",
-		    recv_addr->space, recv_addr->page_no));
+	DBUG_LOG("ib_log", "Applying log to page " << block->page.id);
 
 	recv_addr->state = RECV_BEING_PROCESSED;
 	mutex_exit(&recv_sys->mutex);
@@ -2032,23 +2032,11 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 	bool modification_to_page = false; // not mtr_t::has_modifications()!
 	lsn_t start_lsn = 0, end_lsn = 0;
 
-	recv = UT_LIST_GET_FIRST(recv_addr->rec_list);
-
-	while (recv) {
+	for (recv_t* recv = UT_LIST_GET_FIRST(recv_addr->rec_list);
+	     recv; recv = UT_LIST_GET_NEXT(rec_list, recv)) {
 		end_lsn = recv->end_lsn;
 
 		ut_ad(end_lsn <= log_sys->log.scanned_lsn);
-
-		if (recv->len > RECV_DATA_BLOCK_SIZE) {
-			/* We have to copy the record body to a separate
-			buffer */
-
-			buf = static_cast<byte*>(ut_malloc_nokey(recv->len));
-
-			recv_data_copy_to_buf(buf, recv);
-		} else {
-			buf = ((byte*)(recv->data)) + sizeof(recv_data_t);
-		}
 
 		if (recv->start_lsn < init_lsn || recv->start_lsn < page_lsn) {
 			/* Ignore this record, because there are later changes
@@ -2080,48 +2068,53 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 					recv_addr->space, recv_addr->page_no);
 			}
 
-			DBUG_PRINT("ib_log",
-				   ("apply " LSN_PF ":"
-				    " %s len " ULINTPF " page %u:%u",
-				    recv->start_lsn,
-				    get_mlog_string(recv->type), recv->len,
-				    recv_addr->space,
-				    recv_addr->page_no));
+			DBUG_LOG("ib_log", "apply " << recv->start_lsn << ": "
+				 << get_mlog_string(recv->type)
+				 << " len " << recv->len
+				 << " page " << block->page.id);
+
+			byte* buf;
+
+			if (recv->len > RECV_DATA_BLOCK_SIZE) {
+				/* We have to copy the record body to
+				a separate buffer */
+				buf = static_cast<byte*>
+					(ut_malloc_nokey(recv->len));
+				recv_data_copy_to_buf(buf, recv);
+			} else {
+				buf = reinterpret_cast<byte*>(recv->data)
+					+ sizeof *recv->data;
+			}
 
 			recv_parse_or_apply_log_rec_body(
 				recv->type, buf, buf + recv->len,
-				recv_addr->space, recv_addr->page_no,
-				true, block, &mtr);
+				block->page.id.space(),
+				block->page.id.page_no(), true, block, &mtr);
 
 			end_lsn = recv->start_lsn + recv->len;
 			mach_write_to_8(FIL_PAGE_LSN + page, end_lsn);
-			mach_write_to_8(UNIV_PAGE_SIZE
+			mach_write_to_8(srv_page_size
 					- FIL_PAGE_END_LSN_OLD_CHKSUM
 					+ page, end_lsn);
 
 			if (page_zip) {
-				mach_write_to_8(FIL_PAGE_LSN
-						+ page_zip->data, end_lsn);
+				mach_write_to_8(FIL_PAGE_LSN + page_zip->data,
+						end_lsn);
+			}
+
+			if (recv->len > RECV_DATA_BLOCK_SIZE) {
+				ut_free(buf);
 			}
 		}
-
-		if (recv->len > RECV_DATA_BLOCK_SIZE) {
-			ut_free(buf);
-		}
-
-		recv = UT_LIST_GET_NEXT(rec_list, recv);
 	}
 
 #ifdef UNIV_ZIP_DEBUG
-	if (fil_page_index_page_check(page)) {
-		page_zip_des_t*	page_zip = buf_block_get_page_zip(block);
-
-		ut_a(!page_zip
-		     || page_zip_validate_low(page_zip, page, NULL, FALSE));
-	}
+	ut_ad(!fil_page_index_page_check(page)
+	      || !page_zip
+	      || page_zip_validate_low(page_zip, page, NULL, FALSE));
 #endif /* UNIV_ZIP_DEBUG */
 
-	if (modification_to_page) {
+	if (start_lsn) {
 		log_flush_order_mutex_enter();
 		buf_flush_recv_note_modification(block, start_lsn, end_lsn);
 		log_flush_order_mutex_exit();
@@ -2307,10 +2300,14 @@ ignore:
 				goto ignore;
 			}
 
-			const page_id_t		page_id(recv_addr->space,
-							recv_addr->page_no);
 			fil_space_t* space = fil_space_acquire(
 				recv_addr->space);
+			if (!space) {
+				goto ignore;
+			}
+
+			const page_id_t page_id(recv_addr->space,
+						recv_addr->page_no);
 			const page_size_t page_size(space->flags);
 
 			if (recv_addr->state == RECV_NOT_PROCESSED) {
@@ -2353,7 +2350,7 @@ apply:
 				be older than the page in the data
 				file.
 
-				The check is a too broad, causing all
+				The check is too broad, causing all
 				tables whose names start with FTS_ to
 				skip the optimization. */
 				if (op.load || strstr(space->name, "/FTS_")) {
