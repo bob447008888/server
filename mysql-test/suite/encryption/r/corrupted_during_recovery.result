@@ -1,0 +1,13 @@
+CREATE TABLE t1(a BIGINT PRIMARY KEY) ENGINE=InnoDB, ENCRYPTED=YES;
+INSERT INTO t1 VALUES(1);
+SET GLOBAL innodb_flush_log_at_trx_commit=1;
+INSERT INTO t1 VALUES(2);
+# Kill the server
+# Corrupt the page checksum
+SELECT * FROM t1;
+ERROR 42000: Unknown storage engine 'InnoDB'
+SELECT * FROM t1;
+a
+1
+2
+DROP TABLE t1;
