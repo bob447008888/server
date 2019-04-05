@@ -5565,7 +5565,15 @@ buf_page_create(
 
 		buf_block_free(free_block);
 
-		return(buf_page_get_with_no_latch(page_id, page_size, mtr));
+		if (!recv_recovery_is_on()) {
+			return buf_page_get_with_no_latch(page_id, page_size,
+							  mtr);
+		}
+
+		mutex_exit(&recv_sys->mutex);
+		block = buf_page_get_with_no_latch(page_id, page_size, mtr);
+		mutex_enter(&recv_sys->mutex);
+		return block;
 	}
 
 	/* If we get here, the page was not in buf_pool: init it there */

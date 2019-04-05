@@ -2365,25 +2365,38 @@ apply:
 				mtr.set_log_mode(MTR_LOG_NONE);
 				buf_block_t* block = buf_page_create(
 					page_id, page_size, &mtr);
-				buf_block_dbg_add_level(block,
-							SYNC_NO_ORDER_CHECK);
-				buf_block_fix(block);
-				mtr.x_latch_at_savepoint(0, block);
-				recv_recover_page(block, mtr, recv_addr,
-						  op.lsn);
-				ut_ad(mtr.has_committed());
+				if (recv_addr->state == RECV_PROCESSED) {
+					/* The page happened to exist
+					in the buffer pool, or it was
+					just being read in. Before
+					buf_page_get_with_no_latch()
+					returned, all changes must have
+					been applied to the page already. */
+					mtr.commit();
+				} else {
+					buf_block_dbg_add_level(
+						block,
+						SYNC_NO_ORDER_CHECK);
+					buf_block_fix(block);
+					mtr.x_latch_at_savepoint(0, block);
+					recv_recover_page(block, mtr,
+							  recv_addr, op.lsn);
+					ut_ad(mtr.has_committed());
 
-				if (!recv_no_ibuf_operations) {
-					mutex_exit(&recv_sys->mutex);
-					rw_lock_x_lock(&block->lock);
-					ibuf_merge_or_delete_for_page(
-						block, page_id, &page_size,
-						true);
-					rw_lock_x_unlock(&block->lock);
-					mutex_enter(&recv_sys->mutex);
+					if (!recv_no_ibuf_operations) {
+						/* We skipped this in
+						buf_page_create(). */
+						mutex_exit(&recv_sys->mutex);
+						rw_lock_x_lock(&block->lock);
+						ibuf_merge_or_delete_for_page(
+							block, page_id,
+							&page_size, true);
+						rw_lock_x_unlock(&block->lock);
+						mutex_enter(&recv_sys->mutex);
+					}
+
+					buf_block_unfix(block);
 				}
-
-				buf_block_unfix(block);
 			}
 
 			fil_space_release(space);
