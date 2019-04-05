@@ -9,17 +9,18 @@ call mtr.add_suppression("InnoDB: Failed to read file '.*test.t1\\.ibd' at offse
 --enable_query_log
 
 let INNODB_PAGE_SIZE=`select @@innodb_page_size`;
-let MYSQLD_DATADIR=`select @@datadir`;
 CREATE TABLE t1(a BIGINT PRIMARY KEY) ENGINE=InnoDB;
 INSERT INTO t1 VALUES(1);
 # Force a redo log checkpoint.
 --source include/restart_mysqld.inc
+--source ../include/no_checkpoint_start.inc
 CREATE TABLE t2(a BIGINT PRIMARY KEY) ENGINE=InnoDB;
 INSERT INTO t1 VALUES(2);
 SET GLOBAL innodb_flush_log_at_trx_commit=1;
 INSERT INTO t2 VALUES(1);
 
---source include/kill_mysqld.inc
+--let CLEANUP_IF_CHECKPOINT=DROP TABLE t1,t2;
+--source ../include/no_checkpoint_end.inc
 
 --echo # Corrupt the pages
 
@@ -43,7 +44,7 @@ binmode FILE;
 # Corrupt pages 1 to 3. MLOG_INIT_FILE_PAGE2 should protect us!
 # Unfortunately, we are not immune to page 0 corruption.
 seek (FILE, $ps, SEEK_SET) or die "seek";
-print FILE '\xff' x ($ps * 3);
+print FILE chr(0xff) x ($ps * 3);
 close FILE or die "close";
 EOF
 
