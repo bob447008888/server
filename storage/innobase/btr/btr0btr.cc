@@ -851,6 +851,11 @@ btr_page_free_low(
 		       block->page.id.space(),
 		       block->page.id.page_no(),
 		       level != ULINT_UNDEFINED, mtr);
+#if 1 // FIXME: Why does this have no effect on innodb_zip.bug56680?
+	ut_d(mutex_enter(&block->mutex));
+	ut_d(block->page.file_page_was_freed = true);
+	ut_d(mutex_exit(&block->mutex));
+#endif
 
 	/* The page was marked free in the allocation bitmap, but it
 	should remain buffer-fixed until mtr_commit(mtr) or until it
