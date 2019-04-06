@@ -1787,7 +1787,7 @@ parse_log:
 		break;
 	case MLOG_INIT_FILE_PAGE2:
 		/* Allow anything in page_type when creating a page. */
-		ptr = fsp_parse_init_file_page(ptr, end_ptr, block);
+		if (block) fsp_apply_init_file_page(block);
 		break;
 	case MLOG_WRITE_STRING:
 		ptr = mlog_parse_string(ptr, end_ptr, page, page_zip);
