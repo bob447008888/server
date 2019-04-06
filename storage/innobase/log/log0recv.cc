@@ -225,10 +225,17 @@ public:
 	struct op {
 		/** log sequence number of the special record */
 		lsn_t lsn;
-		/** true = MLOG_INDEX_LOAD;
-		false = MLOG_INIT_FILE_PAGE2, MLOG_ZIP_PAGE_COMPRESS
-		or MLOG_INIT_FREE_PAGE */
-		bool load;
+		/** Whether the page needs to be or has been loaded
+		into the buffer pool. Initially set if MLOG_INDEX_LOAD
+		operation has been recorded.
+
+		At the end of the last recovery batch, ibuf_merge()
+		will attempt change buffer merge for pages that
+		reside in the buffer pool and for which !loaded
+		indicates that the page was recovered without loading.
+		(In the last batch, loading pages would cause change
+		buffer merge.) */
+		bool loaded;
 	};
 
 private:
@@ -300,7 +307,7 @@ public:
 		mtr.start();
 
 		for (map::const_iterator i= ids.begin(); i != ids.end(); i++) {
-			if (i->second.load) {
+			if (i->second.loaded) {
 				continue;
 			}
 			if (buf_block_t* block = buf_page_get_gen(
@@ -1662,7 +1669,7 @@ parse_log:
 		break;
 	case MLOG_INIT_FILE_PAGE2:
 		/* Allow anything in page_type when creating a page. */
-		ptr = fsp_parse_init_file_page(ptr, end_ptr, block);
+		if (block) fsp_apply_init_file_page(block);
 		break;
 	case MLOG_INIT_FREE_PAGE:
 		/* The page can be zero-filled and its previous
@@ -1930,9 +1937,10 @@ lsn of a log record.
 @param[in,out]	block		buffer pool page
 @param[in,out]	mtr		mini-transaction
 @param[in,out]	recv_addr	recovery address
-@param[in]	init_lsn	the initial LSN where to start recovery */
+@param[in,out]	init		page initialization operation, or NULL */
 static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
-			      recv_addr_t* recv_addr, lsn_t init_lsn = 0)
+			      recv_addr_t* recv_addr,
+			      mlog_reset_t::op* init = NULL)
 {
 	page_t*		page;
 	page_zip_des_t*	page_zip;
@@ -1942,6 +1950,8 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 	ut_ad(recv_needed_recovery);
 	ut_ad(recv_addr->state != RECV_BEING_PROCESSED);
 	ut_ad(recv_addr->state != RECV_PROCESSED);
+	ut_ad(!init || !init->loaded);
+	ut_ad(!init || init->lsn);
 
 	if (UNIV_UNLIKELY(srv_print_verbose_log == 2)) {
 		fprintf(stderr, "Applying log to page %u:%u\n",
@@ -1963,23 +1973,26 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 		page_lsn = mach_read_from_8(page + FIL_PAGE_LSN);
 	}
 
-	bool modification_to_page = false; // not mtr_t::has_modifications()!
+	bool free_page = false;
 	lsn_t start_lsn = 0, end_lsn = 0;
+	const lsn_t init_lsn = init ? init->lsn : 0;
 
 	for (recv_t* recv = UT_LIST_GET_FIRST(recv_addr->rec_list);
 	     recv; recv = UT_LIST_GET_NEXT(rec_list, recv)) {
+		ut_ad(recv->start_lsn);
 		end_lsn = recv->end_lsn;
-
 		ut_ad(end_lsn <= log_sys.log.scanned_lsn);
 
 		if (recv->start_lsn < init_lsn || recv->start_lsn < page_lsn) {
 			/* Ignore this record, because there are later changes
 			for this page. */
 		} else {
-			if (!modification_to_page) {
+			if (recv->type == MLOG_INIT_FREE_PAGE) {
+				/* This does not really modify the page. */
+				free_page = true;
+			} else if (!start_lsn) {
 				start_lsn = recv->start_lsn;
 			}
-			modification_to_page = true;
 
 			if (UNIV_UNLIKELY(srv_print_verbose_log == 2)) {
 				fprintf(stderr, "apply " LSN_PF ":"
@@ -2038,6 +2051,13 @@ static void recv_recover_page(buf_block_t* block, mtr_t& mtr,
 		log_flush_order_mutex_enter();
 		buf_flush_note_modification(block, start_lsn, end_lsn, NULL);
 		log_flush_order_mutex_exit();
+	} else if (free_page && init) {
+		/* There have been no operations than MLOG_INIT_FREE_PAGE.
+		Any buffered changes must not be merged. A subsequent
+		buf_page_create() from a user thread should discard
+		any buffered changes. */
+		init->loaded = true;
+		ut_ad(!mtr.has_modifications());
 	}
 
 	/* Make sure that committing mtr does not change the modification
@@ -2251,11 +2271,11 @@ apply:
 				if (UT_LIST_GET_LAST(recv_addr->rec_list)
 				    ->end_lsn < op.lsn) {
 skip:
-					op.load = true;
+					op.loaded = true;
 					goto ignore;
 				}
 
-				if (op.load) {
+				if (op.loaded) {
 do_read:
 					recv_addr->state = RECV_NOT_PROCESSED;
 					goto apply;
@@ -2283,14 +2303,12 @@ do_read:
 				The check is too broad, causing all
 				tables whose names start with FTS_ to
 				skip the optimization. */
-				if (op.load
-				    || ((log_sys.log.format
-					 & ~LOG_HEADER_FORMAT_ENCRYPTED)
-					!= LOG_HEADER_FORMAT_10_4
-					&& strstr(space->name, "/FTS_"))) {
-
+				if ((log_sys.log.format
+				     & ~LOG_HEADER_FORMAT_ENCRYPTED)
+				    != LOG_HEADER_FORMAT_10_4
+				    && strstr(space->name, "/FTS_")) {
 					space->release_for_io();
-					op.load = true;
+					op.loaded = true;
 					goto do_read;
 				}
 
@@ -2305,7 +2323,7 @@ do_read:
 					buf_page_get_with_no_latch()
 					returned, all changes must have
 					been applied to the page already. */
-					op.load = true;
+					op.loaded = true;
 					mtr.commit();
 				} else {
 					buf_block_dbg_add_level(
@@ -2313,7 +2331,7 @@ do_read:
 						SYNC_NO_ORDER_CHECK);
 					mtr.x_latch_at_savepoint(0, block);
 					recv_recover_page(block, mtr,
-							  recv_addr, op.lsn);
+							  recv_addr, &op);
 					ut_ad(mtr.has_committed());
 				}
 
