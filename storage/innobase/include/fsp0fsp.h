@@ -627,15 +627,10 @@ fsp_descr_page(
 	const page_id_t		page_id,
 	const page_size_t&	page_size);
 
-/***********************************************************//**
-Parses a redo log record of a file page init.
-@return end of log record or NULL */
-byte*
-fsp_parse_init_file_page(
-/*=====================*/
-	byte*		ptr,	/*!< in: buffer */
-	byte*		end_ptr, /*!< in: buffer end */
-	buf_block_t*	block);	/*!< in: block or NULL */
+/** Initialize a file page whose prior contents should be ignored.
+@param[in,out]	block	buffer pool block */
+void fsp_apply_init_file_page(buf_block_t* block);
+
 #ifdef UNIV_BTR_PRINT
 /*******************************************************************//**
 Writes info of a segment. */
